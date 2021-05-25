@@ -1,0 +1,81 @@
+---
+- name: Playbook to terraform disk
+  hosts: localhost
+  vars:
+    device:  "{{ lookup('env','DEVICE') }}"
+    password:  "{{ lookup('env','PASSWD') }}"
+    host: "{{ lookup('env','HOSTNAME') }}"
+  become: false
+  tasks:
+    - name: Check BIOS Partition
+      parted:
+        device: "{{ device }}"
+        label: gpt
+        number: 1
+        state: present
+        flags: [ boot ]
+        part_end: 8MiB
+
+    - name: Check LUKS Partition
+      parted:
+        device: "{{ device }}"
+        number: 2
+        state: present
+        part_end: -50GiB
+
+
+    - name: Open LUKS container
+      luks_device:
+        device: "{{ device }}2"
+        state: opened
+        name: lvmcrypt
+        passphrase: "{{ password }}"
+
+
+    - name: Check Volume Group
+      lvg:
+        vg: "{{ host }}"
+        pvs: /dev/mapper/lvmcrypt
+
+    - name: Check Logical Volumes
+      lvol: 
+        vg: vg
+        lv: "{{ item.name }}"
+        size: "{{ item.size}}"
+        shrink: false
+      loop:
+        - { size: "20GiB", name: "swap" }
+        - { size: "50GiB", name: "root" }
+        - { size: "10GiB", name: "darch-etc" }
+        - { size: "10GiB", name: "darch-var-lib" }
+
+    - name: Check Logical FS
+      filesystem:
+        fstype: "{{ item.fs }}"
+        dev: "/dev/{{ host }}/{{ item.name }}"
+      loop:
+        - { fs: "swap", name: "swap" }
+        - { fs: "ext4", name: "root" }
+        - { fs: "ext4", name: "darch-etc" }
+        - { fs: "ext4", name: "darch-var-lib" }
+
+    - name: Check Mountpoints
+      file:
+        state: directory
+        path: "{{ item.path }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - { path: "/etc/darch" }
+        - { path: "/var/lib/darch" }
+
+    - name: Mount Logical Volumes
+      mount:
+        name: "{{ item.mount }}"
+        src: "/dev/{{ host }}/{{ item.vol }}"
+        fstype: ext4
+        state: mounted
+      loop:
+        - { mount: "/etc/darch", vol: "darch-etc" }
+        - { mount: "/var/lib/darch", vol: "darch-var-lib" }
